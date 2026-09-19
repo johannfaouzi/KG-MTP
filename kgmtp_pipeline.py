@@ -102,9 +102,14 @@ def run_kgmtp_pipeline(x_train, y_train, x_test, y_test, n_kernels=50_000, seed=
     dict with keys:
         train_fit_transform_runtime : float
             Seconds for fitting all three branches on `x_train` (a cold fit +
-            transform of the training data, as `KGMTP.fit` returns both).
+            transform of the training data, as `KGMTP.fit` returns both) --
+            including each non-base branch's Hilbert-transform/diff preprocessing
+            of `x_train`, timed inline rather than upfront, so this reflects the
+            real cost of going from raw `x_train` to fitted features.
         test_transform_runtime : float
-            Seconds for transforming `x_test` alone (`KGMTP.predict`, post-fit).
+            Seconds for transforming `x_test` alone (`KGMTP.predict`, post-fit) --
+            including each non-base branch's Hilbert-transform/diff preprocessing
+            of `x_test`, timed the same way as above.
         accuracy_test : float
             Classification accuracy on `x_test`/`y_test`, using the real pipeline
             (torch `SparseScaler` on Hydra features, `StandardScaler` +
@@ -121,27 +126,32 @@ def run_kgmtp_pipeline(x_train, y_train, x_test, y_test, n_kernels=50_000, seed=
     weights = build_weights()
     rng = np.random.default_rng(seed)
 
-    x_train_hilbert = _hilbert_transform_loop(x_train)
-    x_test_hilbert = _hilbert_transform_loop(x_test)
-    x_train_diff = np.diff(x_train, 1)
-    x_test_diff = np.diff(x_test, 1)
-
     n_kernels_per_branch = n_kernels // 3
 
+    # Hilbert-transform/diff preprocessing is timed *inside* both windows below,
+    # rather than upfront -- a caller going from raw x_train/x_test to fitted
+    # features (or to transformed test features) pays this cost either way, and
+    # excluding it here would understate this implementation's real runtime
+    # relative to anything that counts it (e.g. aeon's `KGMTP.fit`/`.transform`,
+    # which compute their own Hilbert transform + diff internally).
     t0 = time.perf_counter()
     branch_base = KGMTP(num_features=n_kernels_per_branch, weights=weights)
     train_feat, train_hydra = branch_base.fit(x_train=x_train, rng=rng)
 
+    x_train_hilbert = _hilbert_transform_loop(x_train)
     branch_hilbert = KGMTP(num_features=n_kernels_per_branch, weights=weights)
     train_feat_h, train_hydra_h = branch_hilbert.fit(x_train=x_train_hilbert, rng=rng)
 
+    x_train_diff = np.diff(x_train, 1)
     branch_diff = KGMTP(num_features=n_kernels_per_branch, weights=weights)
     train_feat_d, train_hydra_d = branch_diff.fit(x_train=x_train_diff, rng=rng)
     train_fit_transform_runtime = time.perf_counter() - t0
 
     t0 = time.perf_counter()
     test_feat, test_hydra = branch_base.predict(x_test)
+    x_test_hilbert = _hilbert_transform_loop(x_test)
     test_feat_h, test_hydra_h = branch_hilbert.predict(x_test_hilbert)
+    x_test_diff = np.diff(x_test, 1)
     test_feat_d, test_hydra_d = branch_diff.predict(x_test_diff)
     test_transform_runtime = time.perf_counter() - t0
 
