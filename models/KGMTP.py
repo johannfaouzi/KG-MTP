@@ -11,7 +11,7 @@ from numba import njit, prange, vectorize,float32
 simplefilter(action='ignore', category=FutureWarning)
 
 
-def fit(X, num_features=10_000, max_dilations_per_kernel=32, weights=None):
+def fit(X, num_features=10_000, max_dilations_per_kernel=32, weights=None, rng=None):
     _, input_length = X.shape
 
     num_kernels = len(weights)
@@ -23,7 +23,13 @@ def fit(X, num_features=10_000, max_dilations_per_kernel=32, weights=None):
 
     quantiles = _quantiles(num_kernels * num_features_per_kernel)
 
-    biases = _fit_biases(X, dilations, num_features_per_dilation, quantiles, weights)
+    if rng is None:
+        # No RNG supplied: fall back to a fresh, unseeded Generator so the
+        # function still works standalone, but callers that care about
+        # reproducibility should always pass their own `rng`.
+        rng = np.random.default_rng()
+
+    biases = _fit_biases(X, dilations, num_features_per_dilation, quantiles, weights, rng)
 
     return dilations, num_features_per_dilation, biases, weights
 
@@ -61,9 +67,8 @@ def _PPV(a, b):
         return 0
 
 
-@njit("float32[:](float64[:,:],int32[:],int32[:],float32[:],float32[:,:])",
-      fastmath=True, parallel=False, cache=True)
-def _fit_biases(X, dilations, num_features_per_dilation, quantiles, weights):
+@njit(fastmath=True, parallel=False, cache=True)
+def _fit_biases(X, dilations, num_features_per_dilation, quantiles, weights, rng):
     indices1 = np.array([0, 1, 2, 3, 4, 5],
                         dtype=np.int32)
     indices2 = np.array([0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 1, 2, 1, 3, 1, 4, 1, 5, 2, 3, 2, 4, 2, 5, 3, 4, 3, 5, 4, 5],
@@ -108,10 +113,10 @@ def _fit_biases(X, dilations, num_features_per_dilation, quantiles, weights):
         for kernel_index in range(6):
 
             feature_index_end = feature_index_start + num_features_this_dilation
-            _X1 = X[np.random.randint(num_examples)]
-            
-            A[:-dilation] = -_X1  
-            G[:-dilation] = _X1 + _X1 + _X1 + _X1 + _X1 + _X1  
+            _X1 = X[rng.integers(0, num_examples)]
+
+            A[:-dilation] = -_X1
+            G[:-dilation] = _X1 + _X1 + _X1 + _X1 + _X1 + _X1
 
             C_alpha = np.zeros(input_length, dtype=np.float64)
             C_alpha[:] = A
@@ -145,10 +150,10 @@ def _fit_biases(X, dilations, num_features_per_dilation, quantiles, weights):
         for kernel_index in range(0, 15):
 
             feature_index_end = feature_index_start + num_features_this_dilation
-            _X1 = X[np.random.randint(num_examples)]
-            
-            A[:-dilation] = -_X1  
-            G[:-dilation] = _X1 + _X1 + _X1  
+            _X1 = X[rng.integers(0, num_examples)]
+
+            A[:-dilation] = -_X1
+            G[:-dilation] = _X1 + _X1 + _X1
 
             C_alpha = np.zeros(input_length, dtype=np.float64)
             C_alpha[:] = A
@@ -182,10 +187,10 @@ def _fit_biases(X, dilations, num_features_per_dilation, quantiles, weights):
         for kernel_index in range(0, 20):
 
             feature_index_end = feature_index_start + num_features_this_dilation
-            _X1 = X[np.random.randint(num_examples)]
-            
+            _X1 = X[rng.integers(0, num_examples)]
+
             A[:-dilation] = -_X1
-            G[:-dilation] = _X1 + _X1  
+            G[:-dilation] = _X1 + _X1
 
             C_alpha = np.zeros(input_length, dtype=np.float64)
             C_alpha[:] = A
@@ -219,10 +224,10 @@ def _fit_biases(X, dilations, num_features_per_dilation, quantiles, weights):
         for kernel_index in range(0, 15):
 
             feature_index_end = feature_index_start + num_features_this_dilation
-            _X1 = X[np.random.randint(num_examples)]
-            
+            _X1 = X[rng.integers(0, num_examples)]
+
             A[:-dilation] = -_X1 - _X1
-            G[:-dilation] = _X1 + _X1 + _X1  
+            G[:-dilation] = _X1 + _X1 + _X1
 
             C_alpha = np.zeros(input_length, dtype=np.float64)
             C_alpha[:] = A
@@ -256,10 +261,10 @@ def _fit_biases(X, dilations, num_features_per_dilation, quantiles, weights):
         for kernel_index in range(0, 6):
 
             feature_index_end = feature_index_start + num_features_this_dilation
-            _X1 = X[np.random.randint(num_examples)]
-            
-            A[:-dilation] = -_X1 - _X1 - _X1 - _X1 - _X1  
-            G[:-dilation] = _X1 + _X1 + _X1 + _X1 + _X1 + _X1  
+            _X1 = X[rng.integers(0, num_examples)]
+
+            A[:-dilation] = -_X1 - _X1 - _X1 - _X1 - _X1
+            G[:-dilation] = _X1 + _X1 + _X1 + _X1 + _X1 + _X1
 
             C_alpha = np.zeros(input_length, dtype=np.float64)
             C_alpha[:] = A
@@ -336,8 +341,8 @@ def transform(X, parameters, n_features_per_kernel=5) -> Tuple[float32[:, :], fl
             input_length = _X.shape[0] + dilation
             A = np.zeros(input_length, dtype=np.float64)
             G = np.zeros(input_length, dtype=np.float64)
-            A[:-dilation] = -_X  
-            G[:-dilation] = _X + _X + _X + _X + _X + _X  
+            A[:-dilation] = -_X
+            G[:-dilation] = _X + _X + _X + _X + _X + _X
 
             padding = ((kernel_length) * dilation) // 2
             output_length = _X.shape[0] + (2 * padding) - ((kernel_length - 1) * dilation)
@@ -457,8 +462,8 @@ def transform(X, parameters, n_features_per_kernel=5) -> Tuple[float32[:, :], fl
                 feature_index_start = feature_index_end
             A = np.zeros(input_length, dtype=np.float64)
             G = np.zeros(input_length, dtype=np.float64)
-            A[:-dilation] = -_X  
-            G[:-dilation] = _X + _X + _X  
+            A[:-dilation] = -_X
+            G[:-dilation] = _X + _X + _X
 
 
             num_features_this_dilation = num_features_per_dilation[dilation_index]
@@ -543,7 +548,7 @@ def transform(X, parameters, n_features_per_kernel=5) -> Tuple[float32[:, :], fl
             A = np.zeros(input_length, dtype=np.float64)
             G = np.zeros(input_length, dtype=np.float64)
             A[:-dilation] = -_X
-            G[:-dilation] = _X + _X  
+            G[:-dilation] = _X + _X
 
             padding = ((kernel_length) * dilation) // 2
 
@@ -628,7 +633,7 @@ def transform(X, parameters, n_features_per_kernel=5) -> Tuple[float32[:, :], fl
             A = np.zeros(input_length, dtype=np.float64)
             G = np.zeros(input_length, dtype=np.float64)
             A[:-dilation] = -_X - _X
-            G[:-dilation] = _X + _X + _X  
+            G[:-dilation] = _X + _X + _X
 
             padding = ((kernel_length) * dilation) // 2
 
@@ -656,7 +661,7 @@ def transform(X, parameters, n_features_per_kernel=5) -> Tuple[float32[:, :], fl
             for kernel_index in prange(0, 15):
                 feature_index_end = feature_index_start + num_features_this_dilation
 
-                
+
 
                 index_0, index_1, index_2, index_3 = indices4[kernel_index]
 
@@ -720,7 +725,7 @@ def transform(X, parameters, n_features_per_kernel=5) -> Tuple[float32[:, :], fl
             A = np.zeros(input_length, dtype=np.float64)
             G = np.zeros(input_length, dtype=np.float64)
             A[:-dilation] = -_X - _X - _X - _X - _X
-            G[:-dilation] = _X + _X + _X + _X + _X + _X  
+            G[:-dilation] = _X + _X + _X + _X + _X + _X
 
             padding = ((kernel_length) * dilation) // 2
 
@@ -748,7 +753,7 @@ def transform(X, parameters, n_features_per_kernel=5) -> Tuple[float32[:, :], fl
             for kernel_index in prange(0, 6):
                 feature_index_end = feature_index_start + num_features_this_dilation
 
-                
+
 
                 index_0, index_1, index_2, index_3, index_4 = indices5[kernel_index]
 
@@ -853,11 +858,12 @@ class KGMTP:
         self.num_features = num_features
         self.num_kernels = int(self.num_features / self.n_features_per_kernel)
 
-    def fit(self, x_train):
+    def fit(self, x_train, rng=None):
         self.base_parameters = fit(
             x_train,
             num_features=self.num_kernels,
-            weights=self.weights
+            weights=self.weights,
+            rng=rng
 
         )
 
